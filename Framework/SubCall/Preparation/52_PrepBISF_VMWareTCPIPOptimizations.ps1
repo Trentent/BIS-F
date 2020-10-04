@@ -197,6 +197,7 @@ namespace Windows
 Process {
 
 	function Enable-RSSForVMXNet3 {
+        Write-BISFLog -Msg "Entering Enable-RSSForVMXNet3 function..."
 		#count the number of VMXNet3 NIC's
 		$VMXNet3Nics = (Get-WmiObject win32_networkadapter -filter "netconnectionstatus = 2" | where { $_.ServiceName -eq "vmxnet3ndis6" })
 		$NICCount = 0
@@ -284,7 +285,16 @@ Process {
 			if ($setting.setting -like "*Receive-Side Scaling State*") {
 				if ($setting.State -like "*enabled*") {
 					Write-BISFLog "Enabling RSS globally..."
-					netsh interface tcp set global rss=enabled
+
+					$netsh = Start-Process netsh -argumentList @("interface","tcp","set","global","rss=enabled") -PassThru -Wait
+					Show-BISFProgressBar -CheckProcessId $netsh.Id -ActivityText "Running netsh ...please wait" -MaximumExecutionMinutes 1 -TerminateRunawayProcess
+                    if ($netsh.ExitCode -ne 0) {
+                        Set-BISFPreparationState -RebootRequired
+			            Write-BISFLog "Failed to configure NetSh without an error.  Rebooting..."
+                        start-process shutdown.exe -ArgumentList "-r -t 0 -f /d U:0:0 /c `"BISF: A pending reboot was detected.  The system is being rebooted.`"" -Wait
+                    }
+                    
+                    Write-BISFLog "Completed."
 				}
 			}
 		}
@@ -347,11 +357,13 @@ Process {
 			#This script does not take NUMA into consideration (at this time) so NIC assignment will be against all CPU's(-1)
 			#base Processor Number starts at 0, so set to 1.
 			$baseProcessorNumber = 1
-
+            Write-BISFLog -Msg "Checking for NUMA."
 			if ($NumaPresent) {
 				$profile = "NUMA"
+                Write-BISFLog -Msg "NUMA Detected."
 			}
 			else {
+                Write-BISFLog -Msg "NUMA NOT detected."
 				$profile = "Closest" #Closest. Logical processor numbers that are near the network adapter’s base RSS processor are preferred. With this profile, the operating system might rebalance logical processors dynamically based on load. - https://technet.microsoft.com/en-us/library/jj574168(v=ws.11).aspx
 			}
 
@@ -377,6 +389,7 @@ Process {
             ##IF NUMA IS PRESENT THIS SCRIPT CURRENTLY ASSUMES THAT THERE ARE NOT MORE NICs THAN NUMA NODES
 
             #>
+            Write-BISFLog -Msg "Detecting number of network adapters vs CPU Cores."
 			$numberOfProcPerNic = ($CPUCount / $NICCount)
 			switch ($numberOfProcPerNic) {
 				{ $_ -le 2 } { $MaxProc = 1 }
@@ -385,7 +398,7 @@ Process {
 				{ $_ -gt 8 } { $MaxProc = 8 }
 			}
 			$nicCount = 0
-
+            Write-BISFLog -Msg "Setting RSS."
 			foreach ($netAdapter in $netAdapters) {
 				$nicCount++
 				if ($nicCount -eq 1) {
@@ -399,10 +412,12 @@ Process {
 					$maxProcessorNumber = ($CPUCount - 1)
 				}
 				if ($NumaPresent) {
-					$netAdapter | Set-NetAdapterRSS -Enabled $true -BaseProcessorGroup $NICCount -BaseProcessorNumber $baseProcessorNumber -MaxProcessors $MaxProc -MaxProcessorNumber $maxProcessorNumber -profile $profile
+                    Write-BISFLog -Msg "Running Command: $netAdapter | Set-NetAdapterRSS -Enabled $true -BaseProcessorGroup $NICCount -BaseProcessorNumber $baseProcessorNumber -MaxProcessors $MaxProc -MaxProcessorNumber $maxProcessorNumber -profile $profile -NoRestart"
+					$netAdapter | Set-NetAdapterRSS -Enabled $true -BaseProcessorGroup $NICCount -BaseProcessorNumber $baseProcessorNumber -MaxProcessors $MaxProc -MaxProcessorNumber $maxProcessorNumber -profile $profile -NoRestart
 				}
 				else {
-					$netAdapter | Set-NetAdapterRSS -Enabled $true -BaseProcessorNumber $baseProcessorNumber -MaxProcessors $MaxProc -MaxProcessorNumber $maxProcessorNumber -profile $profile
+                    Write-BISFLog -Msg "Running Command: $netAdapter | Set-NetAdapterRSS -Enabled $true -BaseProcessorNumber $baseProcessorNumber -MaxProcessors $MaxProc -MaxProcessorNumber $maxProcessorNumber -profile $profile  -NoRestart"
+					$netAdapter | Set-NetAdapterRSS -Enabled $true -BaseProcessorNumber $baseProcessorNumber -MaxProcessors $MaxProc -MaxProcessorNumber $maxProcessorNumber -profile $profile -NoRestart
 				}
 
 			}
